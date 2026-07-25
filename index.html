@@ -205,12 +205,16 @@
             return cs;
         }
 
-        // --- Direct Client-Side API Fetch ---
+        // --- Client-Side API Fetch (Routed via CORS Proxy) ---
         function fetchData() {
-            const apiUrl = `https://api.adsb.lol/v2/lat/${currentAirport.lat}/lon/${currentAirport.long}/dist/${currentAirport.radius}`;
+            const rawUrl = `https://api.adsb.lol/v2/lat/${currentAirport.lat}/lon/${currentAirport.long}/dist/${currentAirport.radius}`;
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(rawUrl)}`;
 
-            fetch(apiUrl)
-                .then(res => res.json())
+            fetch(proxyUrl)
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                })
                 .then(data => {
                     if (!data.ac) return;
 
@@ -261,14 +265,17 @@
                         }
                     }
                 })
-                .catch(err => console.error("Direct API error:", err));
+                .catch(err => console.error("Proxy API Fetch Error:", err));
         }
 
         function fetchRoute(callsign) {
             if (!callsign || queriedFlights[callsign]) return;
             queriedFlights[callsign] = true;
 
-            fetch('https://api.adsb.lol/api/0/routeset', {
+            const targetUrl = 'https://api.adsb.lol/api/0/routeset';
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+
+            fetch(proxyUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ planes: [{ callsign, lat: 0, lng: 0 }] })
@@ -279,7 +286,7 @@
                     flightRoutes[callsign] = `${data[0]._airports[0].iata || ''} → ${data[0]._airports[1].iata || ''}`;
                 }
             })
-            .catch(err => console.error("Route error:", err));
+            .catch(err => console.error("Route Fetch Error:", err));
         }
 
         function updatePillUI(ac) {
@@ -322,7 +329,7 @@
 
         window.onload = function() {
             fetchData();
-            setInterval(fetchData, 4000); // Polls direct API safely every 4 seconds
+            setInterval(fetchData, 4000); // Polls API via proxy every 4 seconds
         };
     </script>
 </body>
