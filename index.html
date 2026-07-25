@@ -101,24 +101,20 @@
         const track = ac.track || ac.mag_heading || ac.true_heading || 0;
         const speed = ac.gs || 0;
         const lon = ac.lon || 0;
-        const lat = ac.lat || 0;
 
-        // 1. Minimum Airliner Speed Filter (Ignores C172, Helicopters, GA traffic)
-        if (speed < 85 && ac.alt > 100) return false;
-
-        // 2. Ignore non-commercial / light aircraft types if available in API
+        // 1. Ignore light aircraft types
         const type = (ac.t || '').toUpperCase();
         if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35'].includes(type)) return false;
 
-        // 3. Heading Alignment Check for EGLL (090° or 270° Runway Alignment)
+        // 2. Heading Alignment Check for EGLL (090° Easterly or 270° Westerly)
         const isWesterlyHeading = track >= 245 && track <= 295; // Landing 27L / 27R
         const isEasterlyHeading = track >= 070 && track <= 110; // Landing 09L / 09R
 
         if (!isWesterlyHeading && !isEasterlyHeading) return false;
 
-        // 4. Corridor Alignment (Ensure they are east of LHR for 27s or west for 09s)
-        if (isWesterlyHeading && lon < currentAirport.long - 0.02) return false; // Must be approaching from the East
-        if (isEasterlyHeading && lon > currentAirport.long + 0.02) return false; // Must be approaching from the West
+        // 3. Corridor Alignment (East of LHR for 27s, West of LHR for 09s)
+        if (isWesterlyHeading && lon < currentAirport.long - 0.02) return false; 
+        if (isEasterlyHeading && lon > currentAirport.long + 0.02) return false; 
 
         return true;
     }
@@ -129,6 +125,37 @@
             .then(data => {
                 if (!data.ac) return;
 
+                // 1. IF WE ARE ALREADY TRACKING AN ACTIVE ARRIVAL: Keep tracking it all the way to touchdown/rollout
+                if (activeTargetHex) {
+                    const currentTracked = data.ac.find(ac => ac.hex === activeTargetHex);
+
+                    if (currentTracked) {
+                        const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
+                        const speed = currentTracked.gs || 0;
+
+                        // Check if aircraft has landed and rolled off runway (speed < 28 knots on ground)
+                        if ((alt === 0 || currentTracked.alt_baro === "ground") && speed < 28) {
+                            dismissPill();
+                            completedHexes.add(activeTargetHex);
+                            activeTargetHex = null;
+                        } else {
+                            updatePillUI({
+                                ...currentTracked,
+                                alt,
+                                displayCallsign: transformCallsign(currentTracked.flight),
+                                originalFlight: currentTracked.flight ? currentTracked.flight.trim() : ''
+                            });
+                        }
+                        return;
+                    } else {
+                        // Signal lost or exited coverage
+                        dismissPill();
+                        completedHexes.add(activeTargetHex);
+                        activeTargetHex = null;
+                    }
+                }
+
+                // 2. IF WE ARE LOOKING FOR A NEW ARRIVAL: Strictly require AIRBORNE planes only!
                 let candidates = data.ac.map(ac => {
                     const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
                     const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
@@ -144,44 +171,17 @@
                     };
                 });
 
-                // Apply Strict Arrival Filtering
+                // Filter out non-arrivals and ANY plane on the ground or taxiing
                 candidates = candidates.filter(ac => {
                     if (completedHexes.has(ac.hex)) return false; 
-                    if (ac.alt > 4000) return false;               // Must be below 4,000 ft
-                    if (ac.vRate > 100) return false;               // Must not be climbing
+                    if (ac.alt_baro === "ground") return false;    // NEVER pick ground/taxiing planes as a NEW target
+                    if (ac.alt < 150 || ac.alt > 4000) return false; // Must be in the air (between 150 ft and 4,000 ft)
+                    if (ac.speed < 75) return false;               // Must be moving at approach speed
+                    if (ac.vRate > 100) return false;              // Must not be climbing away
                     return isAlignedWithHeathrow(ac);
                 });
 
-                // Maintain tracking on current target until rollout/exit
-                if (activeTargetHex) {
-                    const currentTracked = data.ac.find(ac => ac.hex === activeTargetHex);
-
-                    if (currentTracked) {
-                        const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
-                        const speed = currentTracked.gs || 0;
-
-                        // Check if aircraft landed and slowed down on taxiway
-                        if ((alt === 0 || currentTracked.alt_baro === "ground") && speed < 30) {
-                            dismissPill();
-                            completedHexes.add(activeTargetHex);
-                            activeTargetHex = null;
-                        } else {
-                            updatePillUI({
-                                ...currentTracked,
-                                alt,
-                                displayCallsign: transformCallsign(currentTracked.flight),
-                                originalFlight: currentTracked.flight ? currentTracked.flight.trim() : ''
-                            });
-                        }
-                        return;
-                    } else {
-                        dismissPill();
-                        completedHexes.add(activeTargetHex);
-                        activeTargetHex = null;
-                    }
-                }
-
-                // Select closest inbound arrival
+                // Sort by altitude (lowest airborne approach gets picked next)
                 candidates.sort((a, b) => a.alt - b.alt);
 
                 if (candidates.length > 0) {
