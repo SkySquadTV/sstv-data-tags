@@ -73,6 +73,7 @@
     <script>
     const urlParams = new URLSearchParams(window.location.search);
     const icaoCode = (urlParams.get('icao') || 'egll').toLowerCase();
+    const mode = (urlParams.get('mode') || 'auto').toLowerCase(); // Read mode parameter ('arr', 'dep', 'auto')
 
     const airportCoords = {
         'egll': { lat: 51.470020, long: -0.454295, radius: 10 },
@@ -97,24 +98,40 @@
         return cs;
     }
 
-    function isAlignedWithHeathrow(ac) {
-        const track = ac.track || ac.mag_heading || ac.true_heading || 0;
-        const speed = ac.gs || 0;
-        const lon = ac.lon || 0;
+    // Vector Kinematics: Check if aircraft velocity vector points TOWARDS airport center
+    function isInboundToAirport(ac) {
+        if (!ac.lat || !ac.lon) return false;
 
-        // 1. Ignore light aircraft types
+        const trackRad = ((ac.track || ac.mag_heading || ac.true_heading || 0) * Math.PI) / 180;
+        
+        // Velocity unit vector
+        const vx = Math.sin(trackRad);
+        const vy = Math.cos(trackRad);
+
+        // Vector pointing from aircraft to airport
+        const dx = currentAirport.long - ac.lon;
+        const dy = currentAirport.lat - ac.lat;
+
+        // Dot product: > 0 means moving TOWARDS the airport (Arrival), < 0 means moving AWAY (Departure)
+        const dotProduct = (vx * dx) + (vy * dy);
+        return dotProduct > 0;
+    }
+
+    function isArrival(ac) {
         const type = (ac.t || '').toUpperCase();
         if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35'].includes(type)) return false;
 
-        // 2. Heading Alignment Check for EGLL (090° Easterly or 270° Westerly)
-        const isWesterlyHeading = track >= 245 && track <= 295; // Landing 27L / 27R
-        const isEasterlyHeading = track >= 070 && track <= 110; // Landing 09L / 09R
+        // 1. MUST be airborne (between 100 ft and 3,500 ft)
+        if (ac.alt_baro === "ground" || ac.alt < 100 || ac.alt > 3800) return false;
 
-        if (!isWesterlyHeading && !isEasterlyHeading) return false;
+        // 2. MUST be moving at approach speeds (75 - 180 kts)
+        if (ac.speed < 75 || ac.speed > 220) return false;
 
-        // 3. Corridor Alignment (East of LHR for 27s, West of LHR for 09s)
-        if (isWesterlyHeading && lon < currentAirport.long - 0.02) return false; 
-        if (isEasterlyHeading && lon > currentAirport.long + 0.02) return false; 
+        // 3. MUST NOT be rapidly climbing (Departures climb at +1500 to +4000 FPM)
+        if (ac.vRate > 250) return false;
+
+        // 4. VECTOR KINEMATICS: Must be moving TOWARDS the airport
+        if (!isInboundToAirport(ac)) return false;
 
         return true;
     }
@@ -125,7 +142,7 @@
             .then(data => {
                 if (!data.ac) return;
 
-                // 1. IF WE ARE ALREADY TRACKING AN ACTIVE ARRIVAL: Keep tracking it all the way to touchdown/rollout
+                // 1. KEEP TRACKING CURRENT ACTIVE TARGET UNTIL ROLLOUT
                 if (activeTargetHex) {
                     const currentTracked = data.ac.find(ac => ac.hex === activeTargetHex);
 
@@ -133,7 +150,7 @@
                         const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
                         const speed = currentTracked.gs || 0;
 
-                        // Check if aircraft has landed and rolled off runway (speed < 28 knots on ground)
+                        // Once landed and slowed down on taxiway/runway exit, dismiss and release lock
                         if ((alt === 0 || currentTracked.alt_baro === "ground") && speed < 28) {
                             dismissPill();
                             completedHexes.add(activeTargetHex);
@@ -148,14 +165,13 @@
                         }
                         return;
                     } else {
-                        // Signal lost or exited coverage
                         dismissPill();
                         completedHexes.add(activeTargetHex);
                         activeTargetHex = null;
                     }
                 }
 
-                // 2. IF WE ARE LOOKING FOR A NEW ARRIVAL: Strictly require AIRBORNE planes only!
+                // 2. LOOK FOR NEW TARGET (If mode === 'arr' or 'auto', enforce strict arrival rules)
                 let candidates = data.ac.map(ac => {
                     const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
                     const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
@@ -171,17 +187,17 @@
                     };
                 });
 
-                // Filter out non-arrivals and ANY plane on the ground or taxiing
+                // Filter candidates
                 candidates = candidates.filter(ac => {
                     if (completedHexes.has(ac.hex)) return false; 
-                    if (ac.alt_baro === "ground") return false;    // NEVER pick ground/taxiing planes as a NEW target
-                    if (ac.alt < 150 || ac.alt > 4000) return false; // Must be in the air (between 150 ft and 4,000 ft)
-                    if (ac.speed < 75) return false;               // Must be moving at approach speed
-                    if (ac.vRate > 100) return false;              // Must not be climbing away
-                    return isAlignedWithHeathrow(ac);
+                    
+                    if (mode === 'arr' || mode === 'auto') {
+                        return isArrival(ac);
+                    }
+                    return true;
                 });
 
-                // Sort by altitude (lowest airborne approach gets picked next)
+                // Sort by lowest altitude (nearest to touchdown)
                 candidates.sort((a, b) => a.alt - b.alt);
 
                 if (candidates.length > 0) {
