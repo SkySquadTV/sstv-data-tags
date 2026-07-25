@@ -112,7 +112,7 @@ function isInboundToAirport(ac) {
 
 function isArrival(ac) {
     const type = (ac.t || '').toUpperCase();
-    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35'].includes(type)) return false;
+    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
 
     // 1. MUST be airborne within altitude window
     if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
@@ -128,7 +128,7 @@ function isArrival(ac) {
 
 function isDeparture(ac) {
     const type = (ac.t || '').toUpperCase();
-    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35'].includes(type)) return false;
+    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', DA42'].includes(type)) return false;
 
     // 1. Altitude must be climbing out from field elevation up to maxAlt
     if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
