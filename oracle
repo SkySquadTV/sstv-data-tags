@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Data Tag Overlay (Direct API)</title>
+    <!-- Import Montserrat for heavy broadcast typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800;900&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Montserrat', 'Trebuchet MS', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: transparent;
+            color: #ffffff;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Top-Right Container Anchor */
+        #pillAnchor {
+            position: absolute;
+            top: 30px;
+            right: 30px;
+            perspective: 1000px;
+        }
+
+        /* Enlarged & High-Legibility Broadcast Card */
+        .pill-card {
+            display: flex;
+            background: rgba(18, 18, 18, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-left: 6px solid #E67E22; /* Thicker accent bar matching lower third */
+            border-radius: 14px;
+            padding: 16px 24px;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(12px);
+            min-width: 500px;
+            gap: 20px;
+
+            /* Slide Animation Off-Screen Right */
+            transform: translateX(120%);
+            opacity: 0;
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s ease;
+        }
+
+        .pill-card.visible {
+            transform: translateX(0);
+            opacity: 1;
+        }
+
+        /* Left Side: Callouts & Route */
+        .pill-left {
+            flex: 1.3;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            border-right: 2px solid rgba(255, 255, 255, 0.15);
+            padding-right: 18px;
+        }
+
+        .status-badge {
+            align-self: flex-start;
+            font-size: 0.75em;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 4px 10px;
+            border-radius: 5px;
+            margin-bottom: 8px;
+            background: rgba(230, 126, 34, 0.25);
+            color: #FF9F43;
+            border: 1px solid rgba(230, 126, 34, 0.6);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+        }
+
+        .status-badge.dep {
+            background: rgba(16, 185, 129, 0.25);
+            color: #10B981;
+            border-color: rgba(16, 185, 129, 0.6);
+        }
+
+        .callsign {
+            font-size: 2em;
+            font-weight: 900;
+            letter-spacing: 0.5px;
+            line-height: 1;
+            color: #ffffff;
+            margin-bottom: 6px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+        }
+
+        .aircraft-details {
+            font-size: 0.85em;
+            color: #e0e0e0;
+            font-weight: 800;
+            margin-bottom: 6px;
+            letter-spacing: 0.3px;
+        }
+
+        .route {
+            font-size: 0.9em;
+            font-weight: 800;
+            color: #ffffff;
+            letter-spacing: 0.2px;
+        }
+
+        /* Right Side: Live Flight Telemetry */
+        .pill-right {
+            flex: 0.9;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 10px 16px;
+            align-items: center;
+        }
+
+        .metric {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .metric-label {
+            font-size: 0.65em;
+            text-transform: uppercase;
+            font-weight: 900;
+            color: #b0b0b0;
+            letter-spacing: 0.8px;
+            margin-bottom: 2px;
+        }
+
+        .metric-val {
+            font-size: 1.15em;
+            font-weight: 900;
+            color: #ffffff;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="pillAnchor">
+        <div id="dataPill" class="pill-card">
+            <div class="pill-left">
+                <span id="badge" class="status-badge">ARRIVING</span>
+                <div id="callsign" class="callsign">---</div>
+                <div id="details" class="aircraft-details">---</div>
+                <div id="route" class="route">---</div>
+            </div>
+            <div class="pill-right">
+                <div class="metric">
+                    <span class="metric-label">DISTANCE</span>
+                    <span id="valDist" class="metric-val">-- nm</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">GND SPEED</span>
+                    <span id="valSpd" class="metric-val">-- kt</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">ALTITUDE</span>
+                    <span id="valAlt" class="metric-val">-- ft</span>
+                </div>
+                <div class="metric">
+                    <span class="metric-label">V/S FPM</span>
+                    <span id="valVs" class="metric-val">--</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const icaoCode = (urlParams.get('icao') || 'egll').toLowerCase();
+        const mode = (urlParams.get('mode') || 'auto').toLowerCase();
+
+        // Airport Latitude, Longitude, and Radius definitions
+        const airportCoords = {
+            'egll': { lat: 51.470020, long: -0.454295, radius: 8 }, // Heathrow
+            'eggd': { lat: 51.382669, long: -2.719090, radius: 8 }  // Bristol
+        };
+
+        const currentAirport = airportCoords[icaoCode] || airportCoords['egll'];
+
+        let currentActiveAircraft = null;
+        let isShowing = false;
+        let flightRoutes = {};
+        let queriedFlights = {};
+
+        // Airline Callsign Regex Conversions
+        const fromcallsign = [/^BAW(\d+)/, /^EZY(\d+)/, /^RYR(\d+)/, /^VIR(\d+)/, /^EXS(\d+)/];
+        const tocallsign = ['BA$1', 'U2$1', 'FR$1', 'VS$1', 'LS$1'];
+
+        function transformCallsign(callsign) {
+            if (!callsign) return '';
+            let cs = callsign.trim();
+            for (let i = 0; i < fromcallsign.length; i++) {
+                if (fromcallsign[i].test(cs)) return cs.replace(fromcallsign[i], tocallsign[i]);
+            }
+            return cs;
+        }
+
+        // --- Direct Client-Side API Fetch ---
+        function fetchData() {
+            const apiUrl = `https://api.adsb.lol/v2/lat/${currentAirport.lat}/lon/${currentAirport.long}/dist/${currentAirport.radius}`;
+
+            fetch(apiUrl)
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.ac) return;
+
+                    let aircraftList = data.ac.map(ac => {
+                        const originalCallsign = ac.flight ? ac.flight.trim() : '';
+                        ac.displayCallsign = transformCallsign(originalCallsign);
+                        ac.originalFlight = originalCallsign;
+                        
+                        const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
+                        const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
+                        ac.vRate = vRate;
+                        const speed = ac.gs || 0;
+
+                        // Fixed Arrival/Departure Classification Logic
+                        if (ac.alt_baro === "ground" || (alt < 300 && speed < 50)) {
+                            ac.status = "on_ground";
+                        } else if (vRate < -100 || (alt < 7000 && vRate <= 0 && speed > 100)) {
+                            ac.status = "approaching";
+                        } else if (vRate > 100 || (alt < 4000 && speed > 50)) {
+                            ac.status = "departing";
+                        } else {
+                            ac.status = "enroute";
+                        }
+
+                        return ac;
+                    });
+
+                    // Filtering strictly based on &mode= parameter
+                    if (mode === 'arr') {
+                        aircraftList = aircraftList.filter(ac => ac.status === 'approaching');
+                    } else if (mode === 'dep') {
+                        aircraftList = aircraftList.filter(ac => ac.status === 'departing' || ac.status === 'on_ground');
+                    } else {
+                        aircraftList = aircraftList.filter(ac => ac.status === 'approaching' || ac.status === 'departing' || ac.status === 'on_ground');
+                    }
+
+                    // Sort by proximity
+                    aircraftList.sort((a, b) => (a.dst || 99) - (b.dst || 99));
+
+                    if (aircraftList.length > 0) {
+                        const topTarget = aircraftList[0];
+                        fetchRoute(topTarget.originalFlight);
+
+                        if (!isShowing) {
+                            triggerPillCycle(topTarget);
+                        } else if (currentActiveAircraft && currentActiveAircraft.hex === topTarget.hex) {
+                            updatePillUI(topTarget);
+                        }
+                    }
+                })
+                .catch(err => console.error("Direct API error:", err));
+        }
+
+        function fetchRoute(callsign) {
+            if (!callsign || queriedFlights[callsign]) return;
+            queriedFlights[callsign] = true;
+
+            fetch('https://api.adsb.lol/api/0/routeset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ planes: [{ callsign, lat: 0, lng: 0 }] })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (Array.isArray(data) && data[0]?._airports?.length >= 2) {
+                    flightRoutes[callsign] = `${data[0]._airports[0].iata || ''} → ${data[0]._airports[1].iata || ''}`;
+                }
+            })
+            .catch(err => console.error("Route error:", err));
+        }
+
+        function updatePillUI(ac) {
+            const badge = document.getElementById('badge');
+            const isDep = ac.status === 'departing' || ac.status === 'on_ground';
+
+            badge.textContent = isDep ? 'DEPARTING' : 'ARRIVING';
+            badge.className = `status-badge ${isDep ? 'dep' : ''}`;
+
+            document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
+            document.getElementById('details').textContent = `${ac.t || 'Aircraft'} • ${ac.r || 'N/A'}`;
+            document.getElementById('route').textContent = flightRoutes[ac.originalFlight] || 'Route Data N/A';
+
+            document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
+            document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
+            document.getElementById('valAlt').textContent = ac.alt_baro === "ground" ? 'GND' : `${ac.alt_baro || 0} ft`;
+            document.getElementById('valVs').textContent = ac.vRate ? `${ac.vRate > 0 ? '+' : ''}${ac.vRate}` : '0';
+        }
+
+        function triggerPillCycle(ac) {
+            isShowing = true;
+            currentActiveAircraft = ac;
+            updatePillUI(ac);
+
+            const pill = document.getElementById('dataPill');
+            pill.classList.add('visible');
+
+            // On-screen time: 45 seconds
+            setTimeout(() => {
+                pill.classList.remove('visible');
+
+                // Off-screen interval before pulling next aircraft: 20 seconds
+                setTimeout(() => {
+                    isShowing = false;
+                    currentActiveAircraft = null;
+                }, 20000);
+
+            }, 45000);
+        }
+
+        window.onload = function() {
+            fetchData();
+            setInterval(fetchData, 4000); // Polls direct API safely every 4 seconds
+        };
+    </script>
+</body>
+</html>
