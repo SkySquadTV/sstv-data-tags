@@ -73,11 +73,12 @@
     <script>
     const urlParams = new URLSearchParams(window.location.search);
     const icaoCode = (urlParams.get('icao') || 'egll').toLowerCase();
-    const mode = (urlParams.get('mode') || 'auto').toLowerCase(); // Read mode parameter ('arr', 'dep', 'auto')
+    const mode = (urlParams.get('mode') || 'auto').toLowerCase();
 
+    // Configuration database for supported airports
     const airportCoords = {
-        'egll': { lat: 51.470020, long: -0.454295, radius: 10 },
-        'eggd': { lat: 51.382669, long: -2.719090, radius: 10 }
+        'egll': { lat: 51.470020, long: -0.454295, radius: 10, elevation: 80, minAlt: 100, maxAlt: 3800 },
+        'eggd': { lat: 51.382669, long: -2.719090, radius: 10, elevation: 600, minAlt: 650, maxAlt: 4500 }
     };
 
     const currentAirport = airportCoords[icaoCode] || airportCoords['egll'];
@@ -98,21 +99,18 @@
         return cs;
     }
 
-    // Vector Kinematics: Check if aircraft velocity vector points TOWARDS airport center
+    // Vector Kinematics: Check if aircraft velocity vector points TOWARDS active airport
     function isInboundToAirport(ac) {
         if (!ac.lat || !ac.lon) return false;
 
         const trackRad = ((ac.track || ac.mag_heading || ac.true_heading || 0) * Math.PI) / 180;
         
-        // Velocity unit vector
         const vx = Math.sin(trackRad);
         const vy = Math.cos(trackRad);
 
-        // Vector pointing from aircraft to airport
         const dx = currentAirport.long - ac.lon;
         const dy = currentAirport.lat - ac.lat;
 
-        // Dot product: > 0 means moving TOWARDS the airport (Arrival), < 0 means moving AWAY (Departure)
         const dotProduct = (vx * dx) + (vy * dy);
         return dotProduct > 0;
     }
@@ -121,13 +119,13 @@
         const type = (ac.t || '').toUpperCase();
         if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35'].includes(type)) return false;
 
-        // 1. MUST be airborne (between 100 ft and 3,500 ft)
-        if (ac.alt_baro === "ground" || ac.alt < 100 || ac.alt > 3800) return false;
+        // 1. MUST be airborne above airport terrain height
+        if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
 
-        // 2. MUST be moving at approach speeds (75 - 180 kts)
-        if (ac.speed < 75 || ac.speed > 220) return false;
+        // 2. MUST be moving at approach speeds
+        if (ac.speed < 70 || ac.speed > 220) return false;
 
-        // 3. MUST NOT be rapidly climbing (Departures climb at +1500 to +4000 FPM)
+        // 3. MUST NOT be rapidly climbing
         if (ac.vRate > 250) return false;
 
         // 4. VECTOR KINEMATICS: Must be moving TOWARDS the airport
@@ -150,7 +148,6 @@
                         const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
                         const speed = currentTracked.gs || 0;
 
-                        // Once landed and slowed down on taxiway/runway exit, dismiss and release lock
                         if ((alt === 0 || currentTracked.alt_baro === "ground") && speed < 28) {
                             dismissPill();
                             completedHexes.add(activeTargetHex);
@@ -171,7 +168,7 @@
                     }
                 }
 
-                // 2. LOOK FOR NEW TARGET (If mode === 'arr' or 'auto', enforce strict arrival rules)
+                // 2. LOOK FOR NEW TARGET
                 let candidates = data.ac.map(ac => {
                     const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
                     const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
@@ -212,87 +209,65 @@
     }
 
     function fetchRoute(ac) {
-    // 1. Cleanly trim the raw callsign to avoid "BAW627 " trailing space issues
-    const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
-    if (!rawCallsign) return;
+        const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
+        if (!rawCallsign) return;
 
-    // Return cached route if already fetched
-    if (flightRoutes[rawCallsign]) {
-        document.getElementById('route').textContent = flightRoutes[rawCallsign];
-        return;
+        if (flightRoutes[rawCallsign]) {
+            document.getElementById('route').textContent = flightRoutes[rawCallsign];
+            return;
+        }
+
+        const payload = {
+            planes: [
+                {
+                    callsign: rawCallsign,
+                    lat: ac.lat || currentAirport.lat,
+                    lng: ac.lon || currentAirport.long
+                }
+            ]
+        };
+
+        fetch('https://api.adsb.lol/api/0/routeset', {
+            method: 'POST',
+            headers: { 
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(res => res.json())
+        .then(data => {
+            let routeString = 'Route N/A';
+
+            if (Array.isArray(data) && data[0]?._airports?.length >= 2) {
+                const origin = data[0]._airports[0].iata || data[0]._airports[0].icao || '';
+                const dest = data[0]._airports[1].iata || data[0]._airports[1].icao || '';
+                if (origin && dest) {
+                    routeString = `${origin} → ${dest}`;
+                }
+            } else if (data[rawCallsign]?.route) {
+                routeString = data[rawCallsign].route;
+            }
+
+            flightRoutes[rawCallsign] = routeString;
+
+            if (activeTargetHex === ac.hex) {
+                document.getElementById('route').textContent = routeString;
+            }
+        })
+        .catch(err => {
+            console.error("Route fetch error:", err);
+            document.getElementById('route').textContent = 'Route Data Unavailable';
+        });
     }
 
-    const payload = {
-        planes: [
-            {
-                callsign: rawCallsign,
-                lat: ac.lat || currentAirport.lat,
-                lng: ac.lon || currentAirport.long
-            }
-        ]
-    };
-
-    fetch('https://api.adsb.lol/api/0/routeset', {
-        method: 'POST',
-        headers: { 
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        },
-        body: JSON.stringify(payload)
-    })
-    .then(res => res.json())
-    .then(data => {
-        let routeString = 'Route N/A';
-
-        // Check if API returned route objects
-        if (Array.isArray(data) && data[0]?._airports?.length >= 2) {
-            const origin = data[0]._airports[0].iata || data[0]._airports[0].icao || '';
-            const dest = data[0]._airports[1].iata || data[0]._airports[1].icao || '';
-            if (origin && dest) {
-                routeString = `${origin} → ${dest}`;
-            }
-        } else if (data[rawCallsign]?.route) {
-            // Alternative fallback structure format
-            routeString = data[rawCallsign].route;
-        }
-
-        // Cache result
-        flightRoutes[rawCallsign] = routeString;
-
-        // DIRECT UI UPDATE: Ensure active target updates immediately if callsign matches
-        if (activeTargetHex === ac.hex) {
-            document.getElementById('route').textContent = routeString;
-        }
-    })
-    .catch(err => {
-        console.error("Route fetch error:", err);
-        // Fallback on error so it doesn't get stuck on "Searching..." forever
-        document.getElementById('route').textContent = 'Route Data Unavailable';
-    });
-}
-
-function updatePillUI(ac) {
-    const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
-    
-    document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
-    document.getElementById('details').textContent = `${ac.t || 'Aircraft'} • ${ac.r || 'N/A'}`;
-    
-    // Display cached route if available, otherwise show loading text
-    document.getElementById('route').textContent = flightRoutes[rawCallsign] || 'Route Data Searching...';
-
-    document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
-    document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
-    document.getElementById('valAlt').textContent = ac.alt === 0 || ac.alt_baro === "ground" ? 'GND' : `${ac.alt || 0} ft`;
-    
-    const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
-    document.getElementById('valVs').textContent = vRate ? `${vRate > 0 ? '+' : ''}${vRate}` : '0';
-}
-
     function updatePillUI(ac) {
-        const originalFlight = ac.originalFlight || '';
+        const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
+        
         document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
         document.getElementById('details').textContent = `${ac.t || 'Aircraft'} • ${ac.r || 'N/A'}`;
-        document.getElementById('route').textContent = flightRoutes[originalFlight] || 'Route Data Searching...';
+        
+        document.getElementById('route').textContent = flightRoutes[rawCallsign] || 'Route Data Searching...';
 
         document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
         document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
