@@ -43,11 +43,17 @@ app.post('/api/routeset', async (req, res) => {
       },
       body: JSON.stringify(req.body)
     });
+
+    if (!response.ok) {
+      // Return an empty array smoothly instead of throwing a 500 server error
+      return res.json([]); 
+    }
+
     const data = await response.json();
     res.json(data);
   } catch (err) {
     console.error("Backend route fetch error:", err.message);
-    res.status(500).json({ error: "Failed to fetch route data" });
+    res.json([]); // Graceful fallback
   }
 });
 
