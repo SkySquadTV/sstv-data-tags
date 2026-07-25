@@ -37,7 +37,10 @@ app.post('/api/routeset', async (req, res) => {
   try {
     const response = await fetch('https://api.adsb.lol/api/0/routeset', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'User-Agent': 'SSTV-Data-Tags-Overlay/1.0'
+      },
       body: JSON.stringify(req.body)
     });
     const data = await response.json();
