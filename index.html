@@ -112,7 +112,7 @@ function isInboundToAirport(ac) {
 
 function isArrival(ac) {
     const type = (ac.t || '').toUpperCase();
-    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42',].includes(type)) return false;
+    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
 
     // 1. MUST be airborne within altitude window
     if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
@@ -128,7 +128,7 @@ function isArrival(ac) {
 
 function isDeparture(ac) {
     const type = (ac.t || '').toUpperCase();
-    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', DA42',].includes(type)) return false;
+    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
 
     // 1. Altitude must be climbing out from field elevation up to maxAlt
     if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
@@ -204,7 +204,7 @@ function fetchData() {
                 return true;
             });
 
-            // Sort: Arrivals lowest altitude first, Departures lowest altitude first (nearest to takeoff)
+            // Sort: lowest altitude first (nearest to ground)
             candidates.sort((a, b) => a.alt - b.alt);
 
             if (candidates.length > 0) {
@@ -256,7 +256,7 @@ function fetchRoute(ac) {
     })
     .catch(() => {
         const portName = icaoCode.toUpperCase() === 'EGGD' ? 'BRS' : 'LHR';
-        const fallbackRoute = isArrival(ac) ? `En Route → ${portName}` : `${portName} → En Route`;
+        const fallbackRoute = `En Route (${portName})`;
         flightRoutes[rawCallsign] = fallbackRoute;
         if (activeTargetHex === ac.hex) {
             document.getElementById('route').textContent = fallbackRoute;
@@ -271,12 +271,12 @@ function updatePillUI(ac) {
     // Dynamic Badge Status (Arr vs Dep)
     if (isDeparture(ac)) {
         badge.textContent = 'DEPARTING';
-        badge.style.background = 'rgba(59, 130, 246, 0.25)'; // Blue accent for departures
+        badge.style.background = 'rgba(59, 130, 246, 0.25)';
         badge.style.color = '#60A5FA';
         badge.style.borderColor = 'rgba(59, 130, 246, 0.6)';
     } else {
         badge.textContent = 'ARRIVING';
-        badge.style.background = 'rgba(16, 185, 129, 0.25)'; // Green accent for arrivals
+        badge.style.background = 'rgba(16, 185, 129, 0.25)';
         badge.style.color = '#10B981';
         badge.style.borderColor = 'rgba(16, 185, 129, 0.6)';
     }
