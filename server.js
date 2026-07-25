@@ -8,19 +8,27 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Serve static files (index.html, etc.)
-app.use(express.static(path.join(__dirname)));
+// Serve all static files from the current directory
+app.use(express.static(__dirname));
+
+// Direct catch-all route to serve index.html for root requests
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
 
 // Proxy endpoint for live flight data
 app.get('/api/flights', async (req, res) => {
   const { lat, lon, dist } = req.query;
   try {
     const response = await fetch(`https://api.adsb.lol/v2/lat/${lat}/lon/${lon}/dist/${dist}`);
+    if (!response.ok) {
+      throw new Error(`API responded with status ${response.status}`);
+    }
     const data = await response.json();
     res.json(data);
   } catch (err) {
-    console.error("Backend fetch error:", err);
-    res.status(500).json({ error: "Failed to fetch ADSB data" });
+    console.error("Backend fetch error:", err.message);
+    res.status(500).json({ error: "Failed to fetch ADSB data", details: err.message });
   }
 });
 
@@ -35,7 +43,7 @@ app.post('/api/routeset', async (req, res) => {
     const data = await response.json();
     res.json(data);
   } catch (err) {
-    console.error("Backend route fetch error:", err);
+    console.error("Backend route fetch error:", err.message);
     res.status(500).json({ error: "Failed to fetch route data" });
   }
 });
