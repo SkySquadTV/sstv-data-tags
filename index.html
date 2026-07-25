@@ -212,27 +212,81 @@
     }
 
     function fetchRoute(ac) {
-        const callsign = ac.originalFlight;
-        if (!callsign || flightRoutes[callsign]) return;
+    // 1. Cleanly trim the raw callsign to avoid "BAW627 " trailing space issues
+    const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
+    if (!rawCallsign) return;
 
-        fetch('/api/routeset', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ planes: [{ callsign, lat: ac.lat || 0, lng: ac.lon || 0 }] })
-        })
-        .then(res => res.json())
-        .then(data => {
-            if (Array.isArray(data) && data[0]?._airports?.length >= 2) {
-                const origin = data[0]._airports[0].iata || data[0]._airports[0].icao || '';
-                const dest = data[0]._airports[1].iata || data[0]._airports[1].icao || '';
-                if (origin && dest) {
-                    flightRoutes[callsign] = `${origin} → ${dest}`;
-                    document.getElementById('route').textContent = flightRoutes[callsign];
-                }
-            }
-        })
-        .catch(err => console.error("Route fetch error:", err));
+    // Return cached route if already fetched
+    if (flightRoutes[rawCallsign]) {
+        document.getElementById('route').textContent = flightRoutes[rawCallsign];
+        return;
     }
+
+    const payload = {
+        planes: [
+            {
+                callsign: rawCallsign,
+                lat: ac.lat || currentAirport.lat,
+                lng: ac.lon || currentAirport.long
+            }
+        ]
+    };
+
+    fetch('https://api.adsb.lol/api/0/routeset', {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(data => {
+        let routeString = 'Route N/A';
+
+        // Check if API returned route objects
+        if (Array.isArray(data) && data[0]?._airports?.length >= 2) {
+            const origin = data[0]._airports[0].iata || data[0]._airports[0].icao || '';
+            const dest = data[0]._airports[1].iata || data[0]._airports[1].icao || '';
+            if (origin && dest) {
+                routeString = `${origin} → ${dest}`;
+            }
+        } else if (data[rawCallsign]?.route) {
+            // Alternative fallback structure format
+            routeString = data[rawCallsign].route;
+        }
+
+        // Cache result
+        flightRoutes[rawCallsign] = routeString;
+
+        // DIRECT UI UPDATE: Ensure active target updates immediately if callsign matches
+        if (activeTargetHex === ac.hex) {
+            document.getElementById('route').textContent = routeString;
+        }
+    })
+    .catch(err => {
+        console.error("Route fetch error:", err);
+        // Fallback on error so it doesn't get stuck on "Searching..." forever
+        document.getElementById('route').textContent = 'Route Data Unavailable';
+    });
+}
+
+function updatePillUI(ac) {
+    const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
+    
+    document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
+    document.getElementById('details').textContent = `${ac.t || 'Aircraft'} • ${ac.r || 'N/A'}`;
+    
+    // Display cached route if available, otherwise show loading text
+    document.getElementById('route').textContent = flightRoutes[rawCallsign] || 'Route Data Searching...';
+
+    document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
+    document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
+    document.getElementById('valAlt').textContent = ac.alt === 0 || ac.alt_baro === "ground" ? 'GND' : `${ac.alt || 0} ft`;
+    
+    const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
+    document.getElementById('valVs').textContent = vRate ? `${vRate > 0 ? '+' : ''}${vRate}` : '0';
+}
 
     function updatePillUI(ac) {
         const originalFlight = ac.originalFlight || '';
