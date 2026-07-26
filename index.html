@@ -20,7 +20,7 @@
             display: flex;
             background: rgba(18, 18, 18, 0.95);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            border-left: 6px solid #F97316;
+            border-left: 6px solid #FF8C00; /* BRAND ORANGE BORDER */
             border-radius: 14px;
             padding: 16px 24px;
             box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7);
@@ -44,8 +44,7 @@
             border: 1px solid rgba(16, 185, 129, 0.6); text-shadow: 0 1px 2px rgba(0,0,0,0.5);
         }
         .callsign { font-size: 2em; font-weight: 900; letter-spacing: 0.5px; line-height: 1; color: #ffffff; margin-bottom: 6px; text-shadow: 0 2px 4px rgba(0,0,0,0.6); }
-        .aircraft-details { font-size: 0.85em; color: #e0e0e0; font-weight: 800; margin-bottom: 6px; letter-spacing: 0.3px; }
-        .route { font-size: 0.9em; font-weight: 800; color: #F97316; letter-spacing: 0.2px; }
+        .aircraft-details { font-size: 0.85em; color: #e0e0e0; font-weight: 800; letter-spacing: 0.3px; }
         .pill-right { flex: 0.9; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px 16px; align-items: center; }
         .metric { display: flex; flex-direction: column; }
         .metric-label { font-size: 0.65em; text-transform: uppercase; font-weight: 900; color: #b0b0b0; letter-spacing: 0.8px; margin-bottom: 2px; }
@@ -59,7 +58,6 @@
                 <span id="badge" class="status-badge">ARRIVING</span>
                 <div id="callsign" class="callsign">---</div>
                 <div id="details" class="aircraft-details">---</div>
-                <div id="route" class="route">---</div>
             </div>
             <div class="pill-right">
                 <div class="metric"><span class="metric-label">DISTANCE</span><span id="valDist" class="metric-val">-- nm</span></div>
@@ -71,235 +69,205 @@
     </div>
 
     <script>
-const urlParams = new URLSearchParams(window.location.search);
-const icaoCode = (urlParams.get('icao') || 'egll').toLowerCase();
-const mode = (urlParams.get('mode') || 'auto').toLowerCase();
+    const urlParams = new URLSearchParams(window.location.search);
+    const icaoCode = (urlParams.get('icao') || 'egll').toLowerCase();
+    const mode = (urlParams.get('mode') || 'auto').toLowerCase();
 
-// Configuration database for supported airports
-const airportCoords = {
-    'egll': { lat: 51.470020, long: -0.454295, radius: 10, elevation: 80, minAlt: 100, maxAlt: 3800 },
-    'eggd': { lat: 51.382669, long: -2.719090, radius: 10, elevation: 600, minAlt: 650, maxAlt: 5000 }
-};
+    const airportCoords = {
+        'egll': { lat: 51.470020, long: -0.454295, radius: 10, elevation: 80, minAlt: 100, maxAlt: 3800 },
+        'eggd': { lat: 51.382669, long: -2.719090, radius: 10, elevation: 600, minAlt: 650, maxAlt: 5000 }
+    };
 
-const currentAirport = airportCoords[icaoCode] || airportCoords['egll'];
+    const currentAirport = airportCoords[icaoCode] || airportCoords['egll'];
 
-let activeTargetHex = null;
-let completedHexes = new Set();
-let flightRoutes = {};
+    let activeTargetHex = null;
+    let completedHexes = new Set();
 
-const fromcallsign = [/^BAW(\d+)/, /^EZY(\d+)/, /^RYR(\d+)/, /^VIR(\d+)/, /^EXS(\d+)/, /^EIN(\d+)/, /^AAL(\d+)/, /^DAL(\d+)/, /^UAL(\d+)/];
-const tocallsign = ['BA$1', 'U2$1', 'FR$1', 'VS$1', 'LS$1', 'EI$1', 'AA$1', 'DL$1', 'UA$1'];
+    // Aircraft Type Lookup Table
+    const aircraftModels = {
+        'A20N': 'Airbus A320neo',
+        'A21N': 'Airbus A321neo',
+        'A319': 'Airbus A319',
+        'A320': 'Airbus A320',
+        'A321': 'Airbus A321',
+        'A332': 'Airbus A330-200',
+        'A333': 'Airbus A330-300',
+        'A339': 'Airbus A330-900neo',
+        'A359': 'Airbus A350-900',
+        'A35K': 'Airbus A350-1000',
+        'A388': 'Airbus A380-800',
+        'B738': 'Boeing 737-800',
+        'B38M': 'Boeing 737 MAX 8',
+        'B772': 'Boeing 777-200',
+        'B773': 'Boeing 777-300',
+        'B77W': 'Boeing 777-300ER',
+        'B788': 'Boeing 787-8',
+        'B789': 'Boeing 787-9',
+        'B78X': 'Boeing 787-10',
+        'E190': 'Embraer E190',
+        'E195': 'Embraer E195',
+        'E295': 'Embraer E195-E2',
+        'AT76': 'ATR 72-600'
+    };
 
-function transformCallsign(callsign) {
-    if (!callsign) return '';
-    let cs = callsign.trim();
-    for (let i = 0; i < fromcallsign.length; i++) {
-        if (fromcallsign[i].test(cs)) return cs.replace(fromcallsign[i], tocallsign[i]);
+    function getAircraftDescription(typeCode) {
+        if (!typeCode) return 'Aircraft';
+        const code = typeCode.toUpperCase();
+        return aircraftModels[code] || code;
     }
-    return cs;
-}
 
-// Check if aircraft velocity vector points TOWARDS active airport (Dot Product > 0)
-function isInboundToAirport(ac) {
-    if (!ac.lat || !ac.lon) return false;
-    const trackRad = ((ac.track || ac.mag_heading || ac.true_heading || 0) * Math.PI) / 180;
-    const vx = Math.sin(trackRad);
-    const vy = Math.cos(trackRad);
-    const dx = currentAirport.long - ac.lon;
-    const dy = currentAirport.lat - ac.lat;
-    return ((vx * dx) + (vy * dy)) > 0;
-}
+    const fromcallsign = [/^BAW(\d+)/, /^EZY(\d+)/, /^RYR(\d+)/, /^VIR(\d+)/, /^EXS(\d+)/, /^EIN(\d+)/, /^AAL(\d+)/, /^DAL(\d+)/, /^UAL(\d+)/];
+    const tocallsign = ['BA$1', 'U2$1', 'FR$1', 'VS$1', 'LS$1', 'EI$1', 'AA$1', 'DL$1', 'UA$1'];
 
-function isArrival(ac) {
-    const type = (ac.t || '').toUpperCase();
-    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
+    function transformCallsign(callsign) {
+        if (!callsign) return '';
+        let cs = callsign.trim();
+        for (let i = 0; i < fromcallsign.length; i++) {
+            if (fromcallsign[i].test(cs)) return cs.replace(fromcallsign[i], tocallsign[i]);
+        }
+        return cs;
+    }
 
-    // 1. MUST be airborne within altitude window
-    if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
-    // 2. Approach speeds
-    if (ac.speed < 70 || ac.speed > 220) return false;
-    // 3. Not rapidly climbing
-    if (ac.vRate > 250) return false;
-    // 4. Heading TOWARDS airport
-    if (!isInboundToAirport(ac)) return false;
+    function isInboundToAirport(ac) {
+        if (!ac.lat || !ac.lon) return false;
+        const trackRad = ((ac.track || ac.mag_heading || ac.true_heading || 0) * Math.PI) / 180;
+        const vx = Math.sin(trackRad);
+        const vy = Math.cos(trackRad);
+        const dx = currentAirport.long - ac.lon;
+        const dy = currentAirport.lat - ac.lat;
+        return ((vx * dx) + (vy * dy)) > 0;
+    }
 
-    return true;
-}
+    function isArrival(ac) {
+        const type = (ac.t || '').toUpperCase();
+        if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
 
-function isDeparture(ac) {
-    const type = (ac.t || '').toUpperCase();
-    if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
+        if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
+        if (ac.speed < 70 || ac.speed > 220) return false;
+        if (ac.vRate > 250) return false;
+        if (!isInboundToAirport(ac)) return false;
 
-    // 1. Altitude must be climbing out from field elevation up to maxAlt
-    if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
-    // 2. Departure speed (airborne & accelerating)
-    if (ac.speed < 80 || ac.speed > 300) return false;
-    // 3. MUST be climbing (+300 FPM or higher)
-    if (ac.vRate < 300) return false;
-    // 4. Heading AWAY from airport (Outbound)
-    if (isInboundToAirport(ac)) return false;
+        return true;
+    }
 
-    return true;
-}
+    function isDeparture(ac) {
+        const type = (ac.t || '').toUpperCase();
+        if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
 
-function fetchData() {
-    fetch(`/api/flights?lat=${currentAirport.lat}&lon=${currentAirport.long}&dist=${currentAirport.radius}`)
-        .then(res => res.json())
-        .then(data => {
-            if (!data.ac) return;
+        if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
+        if (ac.speed < 80 || ac.speed > 300) return false;
+        if (ac.vRate < 300) return false;
+        if (isInboundToAirport(ac)) return false;
 
-            // 1. TRACK CURRENT TARGET UNTIL OUT OF RANGE / CLIMBED OUT
-            if (activeTargetHex) {
-                const currentTracked = data.ac.find(ac => ac.hex === activeTargetHex);
+        return true;
+    }
 
-                if (currentTracked) {
-                    const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
-                    const speed = currentTracked.gs || 0;
+    function fetchData() {
+        fetch(`/api/flights?lat=${currentAirport.lat}&lon=${currentAirport.long}&dist=${currentAirport.radius}`)
+            .then(res => res.json())
+            .then(data => {
+                if (!data.ac) return;
 
-                    // Release target if landed/stopped OR climbed out past radar range
-                    if (((alt === 0 || currentTracked.alt_baro === "ground") && speed < 28) || alt > currentAirport.maxAlt) {
+                if (activeTargetHex) {
+                    const currentTracked = data.ac.find(ac => ac.hex === activeTargetHex);
+
+                    if (currentTracked) {
+                        const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
+                        const speed = currentTracked.gs || 0;
+
+                        if (((alt === 0 || currentTracked.alt_baro === "ground") && speed < 28) || alt > currentAirport.maxAlt) {
+                            dismissPill();
+                            completedHexes.add(activeTargetHex);
+                            activeTargetHex = null;
+                        } else {
+                            updatePillUI({
+                                ...currentTracked,
+                                alt,
+                                displayCallsign: transformCallsign(currentTracked.flight),
+                                originalFlight: currentTracked.flight ? currentTracked.flight.trim() : ''
+                            });
+                        }
+                        return;
+                    } else {
                         dismissPill();
                         completedHexes.add(activeTargetHex);
                         activeTargetHex = null;
-                    } else {
-                        updatePillUI({
-                            ...currentTracked,
-                            alt,
-                            displayCallsign: transformCallsign(currentTracked.flight),
-                            originalFlight: currentTracked.flight ? currentTracked.flight.trim() : ''
-                        });
                     }
-                    return;
-                } else {
-                    dismissPill();
-                    completedHexes.add(activeTargetHex);
-                    activeTargetHex = null;
                 }
-            }
 
-            // 2. PROCESS CANDIDATES FOR NEW TARGET
-            let candidates = data.ac.map(ac => {
-                const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
-                const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
-                const speed = ac.gs || 0;
+                let candidates = data.ac.map(ac => {
+                    const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
+                    const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
+                    const speed = ac.gs || 0;
 
-                return {
-                    ...ac,
-                    alt,
-                    vRate,
-                    speed,
-                    displayCallsign: transformCallsign(ac.flight),
-                    originalFlight: ac.flight ? ac.flight.trim() : ''
-                };
-            });
+                    return {
+                        ...ac,
+                        alt,
+                        vRate,
+                        speed,
+                        displayCallsign: transformCallsign(ac.flight),
+                        originalFlight: ac.flight ? ac.flight.trim() : ''
+                    };
+                });
 
-            // Filter candidates based on mode
-            candidates = candidates.filter(ac => {
-                if (completedHexes.has(ac.hex)) return false; 
-                
-                if (mode === 'arr') return isArrival(ac);
-                if (mode === 'dep') return isDeparture(ac);
-                if (mode === 'auto') return isArrival(ac) || isDeparture(ac);
-                
-                return true;
-            });
+                candidates = candidates.filter(ac => {
+                    if (completedHexes.has(ac.hex)) return false; 
+                    
+                    if (mode === 'arr') return isArrival(ac);
+                    if (mode === 'dep') return isDeparture(ac);
+                    if (mode === 'auto') return isArrival(ac) || isDeparture(ac);
+                    
+                    return true;
+                });
 
-            // Sort: lowest altitude first (nearest to ground)
-            candidates.sort((a, b) => a.alt - b.alt);
+                candidates.sort((a, b) => a.alt - b.alt);
 
-            if (candidates.length > 0) {
-                const target = candidates[0];
-                activeTargetHex = target.hex;
-                fetchRoute(target);
-                updatePillUI(target);
-                showPill();
-            }
-        })
-        .catch(err => console.error("API error:", err));
-}
-
-function fetchRoute(ac) {
-    const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
-    if (!rawCallsign) return;
-
-    if (flightRoutes[rawCallsign]) {
-        document.getElementById('route').textContent = flightRoutes[rawCallsign];
-        return;
+                if (candidates.length > 0) {
+                    const target = candidates[0];
+                    activeTargetHex = target.hex;
+                    updatePillUI(target);
+                    showPill();
+                }
+            })
+            .catch(err => console.error("API error:", err));
     }
 
-    const payload = {
-        planes: [{ callsign: rawCallsign, lat: ac.lat || currentAirport.lat, lng: ac.lon || currentAirport.long }]
+    function updatePillUI(ac) {
+        const badge = document.getElementById('badge');
+        
+        if (isDeparture(ac)) {
+            badge.textContent = 'DEPARTING';
+            badge.style.background = 'rgba(59, 130, 246, 0.25)';
+            badge.style.color = '#60A5FA';
+            badge.style.borderColor = 'rgba(59, 130, 246, 0.6)';
+        } else {
+            badge.textContent = 'ARRIVING';
+            badge.style.background = 'rgba(16, 185, 129, 0.25)';
+            badge.style.color = '#10B981';
+            badge.style.borderColor = 'rgba(16, 185, 129, 0.6)';
+        }
+        
+        const typeDesc = getAircraftDescription(ac.t);
+        const reg = ac.r || 'N/A';
+
+        document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
+        document.getElementById('details').textContent = `${typeDesc} • ${reg}`;
+
+        document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
+        document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
+        document.getElementById('valAlt').textContent = ac.alt === 0 || ac.alt_baro === "ground" ? 'GND' : `${ac.alt || 0} ft`;
+        
+        const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
+        document.getElementById('valVs').textContent = vRate ? `${vRate > 0 ? '+' : ''}${vRate}` : '0';
+    }
+
+    function showPill() { document.getElementById('dataPill').classList.add('visible'); }
+    function dismissPill() { document.getElementById('dataPill').classList.remove('visible'); }
+
+    window.onload = function() {
+        fetchData();
+        setInterval(fetchData, 3000);
     };
-
-    fetch('https://api.adsb.lol/api/0/routeset', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(payload)
-    })
-    .then(res => res.json())
-    .then(data => {
-        let routeString = 'Route N/A';
-
-        if (Array.isArray(data) && data[0]?._airports?.length >= 2) {
-            const origin = data[0]._airports[0].iata || data[0]._airports[0].icao || '';
-            const dest = data[0]._airports[1].iata || data[0]._airports[1].icao || '';
-            if (origin && dest) routeString = `${origin} → ${dest}`;
-        } else if (data[rawCallsign]?.route) {
-            routeString = data[rawCallsign].route;
-        }
-
-        flightRoutes[rawCallsign] = routeString;
-
-        if (activeTargetHex === ac.hex) {
-            document.getElementById('route').textContent = routeString;
-        }
-    })
-    .catch(() => {
-        const portName = icaoCode.toUpperCase() === 'EGGD' ? 'BRS' : 'LHR';
-        const fallbackRoute = `En Route (${portName})`;
-        flightRoutes[rawCallsign] = fallbackRoute;
-        if (activeTargetHex === ac.hex) {
-            document.getElementById('route').textContent = fallbackRoute;
-        }
-    });
-}
-
-function updatePillUI(ac) {
-    const rawCallsign = (ac.flight || ac.originalFlight || '').trim();
-    const badge = document.getElementById('badge');
-    
-    // Dynamic Badge Status (Arr vs Dep)
-    if (isDeparture(ac)) {
-        badge.textContent = 'DEPARTING';
-        badge.style.background = 'rgba(59, 130, 246, 0.25)';
-        badge.style.color = '#60A5FA';
-        badge.style.borderColor = 'rgba(59, 130, 246, 0.6)';
-    } else {
-        badge.textContent = 'ARRIVING';
-        badge.style.background = 'rgba(16, 185, 129, 0.25)';
-        badge.style.color = '#10B981';
-        badge.style.borderColor = 'rgba(16, 185, 129, 0.6)';
-    }
-    
-    document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
-    document.getElementById('details').textContent = `${ac.t || 'Aircraft'} • ${ac.r || 'N/A'}`;
-    document.getElementById('route').textContent = flightRoutes[rawCallsign] || 'Route Data Searching...';
-
-    document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
-    document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
-    document.getElementById('valAlt').textContent = ac.alt === 0 || ac.alt_baro === "ground" ? 'GND' : `${ac.alt || 0} ft`;
-    
-    const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
-    document.getElementById('valVs').textContent = vRate ? `${vRate > 0 ? '+' : ''}${vRate}` : '0';
-}
-
-function showPill() { document.getElementById('dataPill').classList.add('visible'); }
-function dismissPill() { document.getElementById('dataPill').classList.remove('visible'); }
-
-window.onload = function() {
-    fetchData();
-    setInterval(fetchData, 3000);
-};
-</script>
+    </script>
 </body>
 </html>
