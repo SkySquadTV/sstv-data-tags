@@ -8,10 +8,17 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Serves static HTML files and subfolders (like /images/ezy.png) automatically
 app.use(express.static(__dirname));
 
+// Route for default index.html
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Explicit route for Bristol Radar overlay
+app.get('/bristolradar', (req, res) => {
+  res.sendFile(path.join(__dirname, 'bristolradar.html'));
 });
 
 // Fetch Live Flight Data
@@ -49,6 +56,9 @@ app.post('/api/routeset', async (req, res) => {
   }
 });
 
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
