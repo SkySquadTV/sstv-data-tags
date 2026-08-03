@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream Data Tag Overlay - Single Pill Unified</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;800;900&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Montserrat', sans-serif;
+            background: transparent;
+            color: #ffffff;
+            width: 100vw; height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+        #pillAnchor { position: absolute; top: 30px; right: 30px; perspective: 1000px; }
+        .pill-card {
+            display: flex;
+            background: rgba(18, 18, 18, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-left: 6px solid #FF8C00; /* BRAND ORANGE BORDER */
+            border-radius: 14px;
+            padding: 16px 24px;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(12px);
+            min-width: 500px;
+            gap: 20px;
+            transform: translateX(120%);
+            opacity: 0;
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s ease;
+        }
+        .pill-card.visible { transform: translateX(0); opacity: 1; }
+        .pill-left {
+            flex: 1.3; display: flex; flex-direction: column; justify-content: center;
+            border-right: 2px solid rgba(255, 255, 255, 0.15); padding-right: 18px;
+        }
+        .status-badge {
+            align-self: flex-start; font-size: 0.75em; font-weight: 900;
+            text-transform: uppercase; letter-spacing: 1px; padding: 4px 10px;
+            border-radius: 5px; margin-bottom: 8px;
+            background: rgba(16, 185, 129, 0.25); color: #10B981;
+            border: 1px solid rgba(16, 185, 129, 0.6); text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            transition: all 0.3s ease;
+        }
+        .callsign { font-size: 2em; font-weight: 900; letter-spacing: 0.5px; line-height: 1; color: #ffffff; margin-bottom: 6px; text-shadow: 0 2px 4px rgba(0,0,0,0.6); }
+        .aircraft-details { font-size: 0.85em; color: #e0e0e0; font-weight: 800; letter-spacing: 0.3px; }
+        .pill-right { flex: 0.9; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px 16px; align-items: center; }
+        .metric { display: flex; flex-direction: column; }
+        .metric-label { font-size: 0.65em; text-transform: uppercase; font-weight: 900; color: #b0b0b0; letter-spacing: 0.8px; margin-bottom: 2px; }
+        .metric-val { font-size: 1.15em; font-weight: 900; color: #ffffff; text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+    </style>
+</head>
+<body>
+    <div id="pillAnchor">
+        <div id="dataPill" class="pill-card">
+            <div class="pill-left">
+                <span id="badge" class="status-badge">ARRIVING</span>
+                <div id="callsign" class="callsign">---</div>
+                <div id="details" class="aircraft-details">---</div>
+            </div>
+            <div class="pill-right">
+                <div class="metric"><span class="metric-label">DISTANCE</span><span id="valDist" class="metric-val">-- nm</span></div>
+                <div class="metric"><span class="metric-label">GND SPEED</span><span id="valSpd" class="metric-val">-- kt</span></div>
+                <div class="metric"><span class="metric-label">ALTITUDE</span><span id="valAlt" class="metric-val">-- ft</span></div>
+                <div class="metric"><span class="metric-label">V/S FPM</span><span id="valVs" class="metric-val">--</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const icaoCode = (urlParams.get('icao') || 'eggd').toLowerCase(); // Defaulting to Bristol (BRS)
+    const mode = (urlParams.get('mode') || 'auto').toLowerCase();
+
+    const airportCoords = {
+        'egll': { lat: 51.470020, long: -0.454295, radius: 10, elevation: 80, minAlt: 100, maxAlt: 3800 },
+        'eggd': { lat: 51.382669, long: -2.719090, radius: 10, elevation: 600, minAlt: 650, maxAlt: 5000 }
+    };
+
+    const currentAirport = airportCoords[icaoCode] || airportCoords['eggd'];
+
+    let activeTargetHex = null;
+    let completedHexes = new Set();
+    let isTransitioning = false;
+
+    const aircraftModels = {
+        'A20N': 'Airbus A320neo', 'A21N': 'Airbus A321neo', 'A319': 'Airbus A319',
+        'A320': 'Airbus A320', 'A321': 'Airbus A321', 'A332': 'Airbus A330-200',
+        'A333': 'Airbus A330-300', 'A339': 'Airbus A330-900neo', 'A359': 'Airbus A350-900',
+        'A35K': 'Airbus A350-1000', 'A388': 'Airbus A380-800', 'B738': 'Boeing 737-800',
+        'B38M': 'Boeing 737 MAX 8', 'B772': 'Boeing 777-200', 'B773': 'Boeing 777-300',
+        'B77W': 'Boeing 777-300ER', 'B788': 'Boeing 787-8', 'B789': 'Boeing 787-9',
+        'B78X': 'Boeing 787-10', 'E190': 'Embraer E190', 'E195': 'Embraer E195',
+        'E295': 'Embraer E195-E2', 'AT76': 'ATR 72-600'
+    };
+
+    function getAircraftDescription(typeCode) {
+        if (!typeCode) return 'Aircraft';
+        const code = typeCode.toUpperCase();
+        return aircraftModels[code] || code;
+    }
+
+    const fromcallsign = [/^BAW(\d+)/, /^EZY(\d+)/, /^RYR(\d+)/, /^VIR(\d+)/, /^EXS(\d+)/, /^EIN(\d+)/, /^AAL(\d+)/, /^DAL(\d+)/, /^UAL(\d+)/];
+    const tocallsign = ['BA$1', 'U2$1', 'FR$1', 'VS$1', 'LS$1', 'EI$1', 'AA$1', 'DL$1', 'UA$1'];
+
+    function transformCallsign(callsign) {
+        if (!callsign) return '';
+        let cs = callsign.trim();
+        for (let i = 0; i < fromcallsign.length; i++) {
+            if (fromcallsign[i].test(cs)) return cs.replace(fromcallsign[i], tocallsign[i]);
+        }
+        return cs;
+    }
+
+    function isInboundToAirport(ac) {
+        if (!ac.lat || !ac.lon) return false;
+        const trackRad = ((ac.track || ac.mag_heading || ac.true_heading || 0) * Math.PI) / 180;
+        const vx = Math.sin(trackRad);
+        const vy = Math.cos(trackRad);
+        const dx = currentAirport.long - ac.lon;
+        const dy = currentAirport.lat - ac.lat;
+        return ((vx * dx) + (vy * dy)) > 0;
+    }
+
+    function isArrival(ac) {
+        const type = (ac.t || '').toUpperCase();
+        if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
+        if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
+        if (ac.speed < 70 || ac.speed > 220) return false;
+        if (ac.vRate > 250) return false;
+        return isInboundToAirport(ac);
+    }
+
+    function isDeparture(ac) {
+        const type = (ac.t || '').toUpperCase();
+        if (['C172', 'C152', 'P28A', 'PA28', 'C182', 'R44', 'EC35', 'DA42'].includes(type)) return false;
+        if (ac.alt_baro === "ground" || ac.alt < currentAirport.minAlt || ac.alt > currentAirport.maxAlt) return false;
+        if (ac.speed < 80 || ac.speed > 300) return false;
+        if (ac.vRate < 300) return false;
+        return !isInboundToAirport(ac);
+    }
+
+    // Departure-First Priority Scoring Engine
+function calculatePriorityScore(ac) {
+    const dist = ac.dst || 999;
+    let score = 0;
+
+    if (ac.flightType === 'DEP') {
+        // High priority: Initial departure roll & rotation past central point
+        if (ac.alt < 1500) {
+            score = 100 - (ac.alt / 100); // 100 max score right off the runway
+        } else if (ac.alt < 3500) {
+            score = 80 - (ac.alt / 100);  // High priority through early climb
+        } else {
+            score = 40 - (ac.alt / 100);  // Low priority as it nears 5,000 ft
+        }
+    } else if (ac.flightType === 'ARR') {
+        // Secondary priority: Short final arrivals
+        if (dist < 3) {
+            score = 65 - dist; // Higher than climbing departures above 3500 ft
+        } else {
+            score = 30 - dist; // Lower priority for distant arrivals
+        }
+    }
+
+    return score;
+}
+
+    function switchTarget(newTarget) {
+        isTransitioning = true;
+        dismissPill();
+
+        setTimeout(() => {
+            activeTargetHex = newTarget.hex;
+            updatePillUI(newTarget);
+            showPill();
+            isTransitioning = false;
+        }, 500); // Waits for slide-out animation to finish before sliding in new data
+    }
+
+    function fetchData() {
+        if (isTransitioning) return;
+
+        fetch(`/api/flights?lat=${currentAirport.lat}&lon=${currentAirport.long}&dist=${currentAirport.radius}`)
+            .then(res => res.json())
+            .then(data => {
+                if (!data.ac) return;
+
+                // Process & categorize all flights
+                let candidates = data.ac.map(ac => {
+                    const alt = ac.alt_baro === "ground" ? 0 : (parseInt(ac.alt_baro) || 0);
+                    const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
+                    const speed = ac.gs || 0;
+                    
+                    const acObj = {
+                        ...ac,
+                        alt,
+                        vRate,
+                        speed,
+                        displayCallsign: transformCallsign(ac.flight),
+                        originalFlight: ac.flight ? ac.flight.trim() : ''
+                    };
+
+                    if (isArrival(acObj)) acObj.flightType = 'ARR';
+                    else if (isDeparture(acObj)) acObj.flightType = 'DEP';
+                    else acObj.flightType = 'OTHER';
+
+                    acObj.priorityScore = calculatePriorityScore(acObj);
+                    return acObj;
+                });
+
+                // Filter candidates based on mode & uncompleted status
+                candidates = candidates.filter(ac => {
+                    if (completedHexes.has(ac.hex)) return false;
+                    if (mode === 'arr') return ac.flightType === 'ARR';
+                    if (mode === 'dep') return ac.flightType === 'DEP';
+                    if (mode === 'auto') return ac.flightType === 'ARR' || ac.flightType === 'DEP';
+                    return true;
+                });
+
+                // Sort candidates by Priority Score (Highest first)
+                candidates.sort((a, b) => b.priorityScore - a.priorityScore);
+
+                const topCandidate = candidates.length > 0 ? candidates[0] : null;
+
+                // Check active target status
+                if (activeTargetHex) {
+                    const currentTracked = data.ac.find(ac => ac.hex === activeTargetHex);
+
+                    if (currentTracked) {
+                        const alt = currentTracked.alt_baro === "ground" ? 0 : (parseInt(currentTracked.alt_baro) || 0);
+                        const speed = currentTracked.gs || 0;
+
+                        // Exit Condition: finished taxiing or climbed past max altitude
+                        if (((alt === 0 || currentTracked.alt_baro === "ground") && speed < 28) || alt > currentAirport.maxAlt) {
+                            dismissPill();
+                            completedHexes.add(activeTargetHex);
+                            activeTargetHex = null;
+                            return;
+                        }
+
+                        // PREEMPTION LOGIC: Switch target if a new candidate has a significantly higher priority
+                        if (topCandidate && topCandidate.hex !== activeTargetHex && topCandidate.priorityScore > 75) {
+                            switchTarget(topCandidate);
+                            return;
+                        }
+
+                        // Otherwise keep updating the active target UI
+                        updatePillUI({
+                            ...currentTracked,
+                            alt,
+                            displayCallsign: transformCallsign(currentTracked.flight),
+                            flightType: isDeparture(currentTracked) ? 'DEP' : 'ARR'
+                        });
+                        return;
+
+                    } else {
+                        // Aircraft disappeared from radar feed
+                        dismissPill();
+                        completedHexes.add(activeTargetHex);
+                        activeTargetHex = null;
+                    }
+                }
+
+                // If no active target, pick the highest priority candidate available
+                if (topCandidate) {
+                    activeTargetHex = topCandidate.hex;
+                    updatePillUI(topCandidate);
+                    showPill();
+                }
+            })
+            .catch(err => console.error("API error:", err));
+    }
+
+    function updatePillUI(ac) {
+        const badge = document.getElementById('badge');
+        
+        if (ac.flightType === 'DEP') {
+            badge.textContent = 'DEPARTING';
+            badge.style.background = 'rgba(59, 130, 246, 0.25)';
+            badge.style.color = '#60A5FA';
+            badge.style.borderColor = 'rgba(59, 130, 246, 0.6)';
+        } else {
+            badge.textContent = 'ARRIVING';
+            badge.style.background = 'rgba(16, 185, 129, 0.25)';
+            badge.style.color = '#10B981';
+            badge.style.borderColor = 'rgba(16, 185, 129, 0.6)';
+        }
+        
+        const typeDesc = getAircraftDescription(ac.t);
+        const reg = ac.r || 'N/A';
+
+        document.getElementById('callsign').textContent = ac.displayCallsign || ac.hex.toUpperCase();
+        document.getElementById('details').textContent = `${typeDesc} • ${reg}`;
+
+        document.getElementById('valDist').textContent = ac.dst ? `${ac.dst.toFixed(1)} nm` : '--';
+        document.getElementById('valSpd').textContent = ac.gs ? `${Math.round(ac.gs)} kt` : '--';
+        document.getElementById('valAlt').textContent = ac.alt === 0 || ac.alt_baro === "ground" ? 'GND' : `${ac.alt || 0} ft`;
+        
+        const vRate = isNaN(ac.baro_rate) ? (ac.geom_rate || 0) : ac.baro_rate;
+        document.getElementById('valVs').textContent = vRate ? `${vRate > 0 ? '+' : ''}${vRate}` : '0';
+    }
+
+    function showPill() { document.getElementById('dataPill').classList.add('visible'); }
+    function dismissPill() { document.getElementById('dataPill').classList.remove('visible'); }
+
+    window.onload = function() {
+        fetchData();
+        setInterval(fetchData, 3000);
+    };
+    </script>
+</body>
+</html>
